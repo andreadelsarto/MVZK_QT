@@ -1,0 +1,5 @@
+/home/delsa/Code/C++/MVZK/build/CMakeFiles/MusicPlayer.dir
+/home/delsa/Code/C++/MVZK/build/CMakeFiles/edit_cache.dir
+/home/delsa/Code/C++/MVZK/build/CMakeFiles/rebuild_cache.dir
+/home/delsa/Code/C++/MVZK/build/CMakeFiles/MusicPlayer_autogen_timestamp_deps.dir
+/home/delsa/Code/C++/MVZK/build/CMakeFiles/MusicPlayer_autogen.dir

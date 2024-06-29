@@ -1,0 +1,1308 @@
+build/
+cmake/
+  FindTaglib.cmake
+CMakeLists.txt
+main.cpp
+mainwindow/
+  MainWindow.cpp
+  MainWindow.h
+  VisualizerWidget.cpp
+  VisualizerWidget.h
+MusicPlayer.cpp
+MusicPlayer.h
+MusicPlayer.h
+output.txt
+player/
+  MusicPlayer.cpp
+  MusicPlayer.h
+search/
+  Search.cpp
+  Search.h
+widgets/
+  MarqueeLabel.cpp
+  MarqueeLabel.h
+
+
+
+Directory: build
+Directory: cmake
+  File: FindTaglib.cmake
+==> ./cmake/FindTaglib.cmake <==
+find_path(TAGLIB_INCLUDE_DIR taglib/tag.h)
+find_library(TAGLIB_LIBRARY NAMES tag taglib)
+
+if(TAGLIB_INCLUDE_DIR AND TAGLIB_LIBRARY)
+  set(TAGLIB_FOUND TRUE)
+  set(TAGLIB_LIBRARIES ${TAGLIB_LIBRARY})
+  set(TAGLIB_INCLUDE_DIRS ${TAGLIB_INCLUDE_DIR})
+else()
+  set(TAGLIB_FOUND FALSE)
+endif()
+
+mark_as_advanced(TAGLIB_INCLUDE_DIR TAGLIB_LIBRARY)
+
+
+File: CMakeLists.txt
+==> ./CMakeLists.txt <==
+cmake_minimum_required(VERSION 3.14)
+
+project(MusicPlayer)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Specifica il percorso di Qt
+set(Qt6_DIR "/home/delsa/Qt/6.8.0/gcc_64/lib/cmake/Qt6")
+
+# Trova i componenti di Qt6 richiesti
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Multimedia)
+
+# Aggiungi il percorso personalizzato per FindTaglib.cmake
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake")
+
+# Trova e aggiungi la libreria taglib
+find_package(Taglib REQUIRED)
+
+# Trova FFTW3 usando pkg-config
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(FFTW3 REQUIRED fftw3)
+
+# Aggiungi automaticamente l'esecuzione di moc, uic e rcc
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTOUIC ON)
+set(CMAKE_AUTORCC ON)
+
+# Aggiungi i file sorgente
+add_executable(MusicPlayer
+    main.cpp
+    mainwindow/MainWindow.cpp
+    mainwindow/MainWindow.h
+    player/MusicPlayer.cpp
+    player/MusicPlayer.h
+    search/Search.cpp
+    search/Search.h
+    widgets/MarqueeLabel.cpp
+    widgets/MarqueeLabel.h
+)
+
+# Aggiungi manualmente i percorsi degli include
+target_include_directories(MusicPlayer PRIVATE
+    /home/delsa/Qt/6.8.0/gcc_64/include/QtCore
+    /home/delsa/Qt/6.8.0/gcc_64/include/QtGui
+    /home/delsa/Qt/6.8.0/gcc_64/include/QtWidgets
+    /home/delsa/Qt/6.8.0/gcc_64/include/QtMultimedia
+    ${CMAKE_SOURCE_DIR}/mainwindow
+    ${CMAKE_SOURCE_DIR}/player
+    ${CMAKE_SOURCE_DIR}/search
+    ${CMAKE_SOURCE_DIR}/widgets
+    ${TAGLIB_INCLUDE_DIRS}
+    ${FFTW3_INCLUDE_DIRS}
+)
+
+# Link libraries
+target_link_libraries(MusicPlayer
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Multimedia
+    ${TAGLIB_LIBRARIES}
+    ${FFTW3_LIBRARIES}
+    -lz
+)
+
+# Controlla che QtMultimedia sia stato trovato
+if(NOT Qt6Multimedia_FOUND)
+    message(FATAL_ERROR "Qt6Multimedia not found!")
+endif()
+
+
+File: main.cpp
+==> ./main.cpp <==
+#include <QApplication>
+#include "MainWindow.h"
+
+int main(int argc, char *argv[]) {
+    QApplication app(argc, argv);
+
+    MainWindow window;
+    window.show();
+
+    return app.exec();
+}
+
+
+Directory: mainwindow
+  File: MainWindow.cpp
+==> ./mainwindow/MainWindow.cpp <==
+#include "MainWindow.h"
+#include "Search.h"
+#include <QFileDialog>
+#include <QDir>
+#include <QIcon>
+#include <QResizeEvent>
+#include <taglib/fileref.h>
+#include <taglib/tag.h>
+#include <taglib/mpegfile.h>
+#include <taglib/id3v2tag.h>
+#include <taglib/apetag.h>
+#include <taglib/attachedpictureframe.h>
+#include <QPixmap>
+#include <QBuffer>
+#include <QColor>
+#include <QImage>
+#include <QVBoxLayout>
+#include <QMouseEvent>
+#include <QStyle>
+#include <QMap>
+#include <QPair>
+#include <QHash>
+
+// Definisci la funzione qHash per QColor
+uint qHash(const QColor &color, uint seed = 0) {
+    return qHash(qMakePair(color.red(), qMakePair(color.green(), color.blue())), seed);
+}
+
+MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), settings(new QSettings("YourCompany", "MusicPlayer", this)), isShuffleActive(false), isRepeatActive(false) {
+    musicPlayer = new MusicPlayer(this);
+    setupUI();
+
+    // Impostare il volume iniziale al 100%
+    musicPlayer->setVolume(100);
+    volumeSlider->setValue(100);
+
+    // Connect signals and slots
+    connect(playButton, &QPushButton::clicked, this, &MainWindow::play);
+    connect(pauseButton, &QPushButton::clicked, this, &MainWindow::pause);
+    connect(prevButton, &QPushButton::clicked, this, &MainWindow::prevSong);
+    connect(nextButton, &QPushButton::clicked, this, &MainWindow::nextSong);
+    connect(progressSlider, &QSlider::sliderMoved, this, &MainWindow::setPlayerPosition);
+    connect(musicPlayer, &MusicPlayer::positionChanged, this, &MainWindow::updateSlider);
+    connect(musicPlayer, &MusicPlayer::durationChanged, this, &MainWindow::updateSliderRange);
+    connect(volumeSlider, &QSlider::valueChanged, [=](int value) {
+        musicPlayer->setVolume(value);
+    });
+    connect(musicPlayer->getPlayer(), &QMediaPlayer::playbackStateChanged, this, &MainWindow::updatePlayPauseButtons);
+    connect(searchBar, &QLineEdit::textChanged, this, &MainWindow::searchSongs);
+    connect(optionsButton, &QPushButton::clicked, this, &MainWindow::openOptionsDialog);
+    connect(songListWidget, &QListWidget::itemDoubleClicked, this, &MainWindow::playSelectedSong);
+
+    // Connect shuffle and repeat buttons
+    connect(shuffleButton, &QPushButton::clicked, this, &MainWindow::toggleShuffle);
+    connect(repeatButton, &QPushButton::clicked, this, &MainWindow::toggleRepeat);
+
+    // Custom behavior for slider click
+    progressSlider->installEventFilter(this);
+    volumeSlider->installEventFilter(this);
+
+    // Load settings
+    loadSettings();
+
+    // Initially show play button and hide pause button
+    playButton->show();
+    pauseButton->hide();
+}
+
+
+
+MainWindow::~MainWindow() {
+    delete musicPlayer;
+    delete songListWidget;
+    delete volumeSlider;
+    delete progressSlider;
+    delete musicFolderPath;
+    delete searchBar;
+    delete optionsButton;
+    delete playButton;
+    delete pauseButton;
+    delete prevButton;
+    delete nextButton;
+    delete shuffleButton;  // Aggiungi questa linea
+    delete repeatButton;   // Aggiungi questa linea
+    delete optionsDialog;
+    delete settings;
+}
+
+void MainWindow::setupUI() {
+    QWidget *centralWidget = new QWidget(this);
+    mainLayout = new QHBoxLayout(centralWidget);
+
+    // Player widget
+    playerWidget = new QWidget(this);
+    playerLayout = new QVBoxLayout(playerWidget);
+
+    // Aggiungi la title label
+    titleLabel = new QLabel("MVZK", this);
+    titleLabel->setStyleSheet("font-size: 24px; font-weight: bold; color: white;");
+    playerLayout->addWidget(titleLabel, 0, Qt::AlignCenter);
+
+    // Cover art label
+    coverArtLabel = new QLabel(this);
+    coverArtLabel->setScaledContents(true);
+    coverArtLabel->setFixedSize(300, 300);
+    playerLayout->addWidget(coverArtLabel, 0, Qt::AlignCenter);
+
+    // Aggiungi un QSpacerItem per spingere le etichette in basso
+    playerLayout->addItem(new QSpacerItem(20, 40, QSizePolicy::Minimum, QSizePolicy::Expanding));
+
+    // Song title and artist labels
+    songTitleLabel = new MarqueeLabel(this);
+    songArtistLabel = new MarqueeLabel(this);
+    songTitleLabel->setStyleSheet("font-size: 18px; color: white;");
+    songArtistLabel->setStyleSheet("font-size: 14px; color: white;");
+    playerLayout->addWidget(songTitleLabel);
+    playerLayout->addWidget(songArtistLabel);
+
+    // Slider per il progresso della traccia
+    progressSlider = new QSlider(Qt::Horizontal, this);
+    progressSlider->setStyleSheet("QSlider::groove:horizontal { background: #333; height: 4px; }"
+    "QSlider::handle:horizontal { background: #aaa; width: 14px; margin: -5px 0; border-radius: 7px; }"
+    "QSlider::sub-page:horizontal { background: #5a5; }");
+    playerLayout->addWidget(progressSlider);
+
+    // Elapsed and total time labels
+    QHBoxLayout *timeLayout = new QHBoxLayout();
+    elapsedTimeLabel = new QLabel("00:00", this);
+    totalTimeLabel = new QLabel("00:00", this);
+    elapsedTimeLabel->setStyleSheet("color: white;");
+    totalTimeLabel->setStyleSheet("color: white;");
+    timeLayout->addWidget(elapsedTimeLabel);
+    timeLayout->addStretch();
+    timeLayout->addWidget(totalTimeLabel);
+
+    // Aggiungi il layout del tempo dopo lo slider
+    playerLayout->addLayout(timeLayout);
+
+    QHBoxLayout *playbackLayout = new QHBoxLayout();
+
+    shuffleButton = new QPushButton(QIcon::fromTheme("media-playlist-shuffle"), "", this);
+    prevButton = new QPushButton(QIcon::fromTheme("media-skip-backward"), "", this);
+    playButton = new QPushButton(QIcon::fromTheme("media-playback-start"), "", this);
+    pauseButton = new QPushButton(QIcon::fromTheme("media-playback-pause"), "", this);
+    nextButton = new QPushButton(QIcon::fromTheme("media-skip-forward"), "", this);
+    repeatButton = new QPushButton(QIcon::fromTheme("media-playlist-repeat"), "", this);
+
+    shuffleButton->setStyleSheet("background-color: #444; color: white; border: none; padding: 10px; border-radius: 10px;");
+    prevButton->setStyleSheet("background-color: #444; color: white; border: none; padding: 10px; border-radius: 10px;");
+    playButton->setStyleSheet("background-color: #444; color: white; border: none; padding: 10px; border-radius: 10px;");
+    pauseButton->setStyleSheet("background-color: #444; color: white; border: none; padding: 10px; border-radius: 10px;");
+    nextButton->setStyleSheet("background-color: #444; color: white; border: none; padding: 10px; border-radius: 10px;");
+    repeatButton->setStyleSheet("background-color: #444; color: white; border: none; padding: 10px; border-radius: 10px;");
+
+    playbackLayout->addWidget(shuffleButton);
+    playbackLayout->addWidget(prevButton);
+    playbackLayout->addWidget(playButton);
+    playbackLayout->addWidget(pauseButton);
+    playbackLayout->addWidget(nextButton);
+    playbackLayout->addWidget(repeatButton);
+    playerLayout->addLayout(playbackLayout);
+
+    volumeSlider = new QSlider(Qt::Horizontal, this);
+    volumeSlider->setStyleSheet("QSlider::groove:horizontal { background: #333; height: 4px; }"
+    "QSlider::handle:horizontal { background: #aaa; width: 14px; margin: -5px 0; border-radius: 7px; }"
+    "QSlider::sub-page:horizontal { background: #5a5; }");
+    playerLayout->addWidget(volumeSlider);
+
+    // Blocca la larghezza del player
+    playerWidget->setFixedWidth(320);
+
+    // Playlist widget
+    playlistWidget = new QWidget(this);
+    playlistLayout = new QVBoxLayout(playlistWidget);
+
+    // Top bar
+    QHBoxLayout *topBar = new QHBoxLayout();
+    searchBar = new QLineEdit(this);
+    searchBar->setPlaceholderText("Search");
+    searchBar->setStyleSheet("background-color: #fff; color: #333; padding: 10px; margin: 5px; border-radius: 10px; border: 1px solid #ccc;");
+    optionsButton = new QPushButton("Options", this);
+    topBar->addWidget(searchBar);
+    topBar->addStretch();
+    topBar->addWidget(optionsButton);
+    playlistLayout->addLayout(topBar);
+
+    // Playlist area
+    songListWidget = new QListWidget(this);
+    songListWidget->setStyleSheet("background-color: #333; color: white; border: none; padding: 10px;");
+    playlistLayout->addWidget(songListWidget);
+
+    mainLayout->addWidget(playerWidget);
+    mainLayout->addWidget(playlistWidget);
+
+    setCentralWidget(centralWidget);
+
+    // Installare il filtro degli eventi sugli slider
+    progressSlider->installEventFilter(this);
+    volumeSlider->installEventFilter(this);
+
+    // Connect signals and slots
+    connect(playButton, &QPushButton::clicked, this, &MainWindow::play);
+    connect(pauseButton, &QPushButton::clicked, this, &MainWindow::pause);
+    connect(prevButton, &QPushButton::clicked, this, &MainWindow::prevSong);
+    connect(nextButton, &QPushButton::clicked, this, &MainWindow::nextSong);
+    connect(progressSlider, &QSlider::sliderMoved, this, &MainWindow::setPlayerPosition);
+    connect(volumeSlider, &QSlider::valueChanged, [=](int value) {
+        musicPlayer->setVolume(value);
+    });
+    connect(musicPlayer->getPlayer(), &QMediaPlayer::playbackStateChanged, this, &MainWindow::updatePlayPauseButtons);
+    connect(searchBar, &QLineEdit::textChanged, this, &MainWindow::searchSongs);
+    connect(optionsButton, &QPushButton::clicked, this, &MainWindow::openOptionsDialog);
+    connect(songListWidget, &QListWidget::itemDoubleClicked, this, &MainWindow::playSelectedSong);
+
+    // Connect shuffle and repeat buttons
+    connect(shuffleButton, &QPushButton::clicked, this, &MainWindow::toggleShuffle);
+    connect(repeatButton, &QPushButton::clicked, this, &MainWindow::toggleRepeat);
+
+    // Custom behavior for slider click
+    progressSlider->installEventFilter(this);
+    volumeSlider->installEventFilter(this);
+
+    // Load settings
+    loadSettings();
+
+    // Initially show play button and hide pause button
+    playButton->show();
+    pauseButton->hide();
+}
+
+
+
+
+void MainWindow::resizeEvent(QResizeEvent *event) {
+    QMainWindow::resizeEvent(event);
+    updateLayout();
+}
+
+void MainWindow::updateLayout() {
+    if (width() > height()) {
+        // Landscape mode
+        mainLayout->setDirection(QBoxLayout::LeftToRight);
+    } else {
+        // Portrait mode
+        mainLayout->setDirection(QBoxLayout::TopToBottom);
+    }
+}
+
+void MainWindow::play() {
+    if (musicPlayer->getPlayer()->position() == musicPlayer->getPlayer()->duration()) {
+        musicPlayer->setPosition(0);
+    }
+    musicPlayer->play();
+    playButton->hide();
+    pauseButton->show();
+}
+
+void MainWindow::pause() {
+    musicPlayer->pause();
+    playButton->show();
+    pauseButton->hide();
+}
+
+void MainWindow::toggleShuffle() {
+    isShuffleActive = !isShuffleActive;
+    musicPlayer->setShuffle(isShuffleActive);
+    shuffleButton->setStyleSheet(isShuffleActive ? QString("background-color: %1; color: white; border: none; padding: 10px; border-radius: 10px;").arg(dominantColor.name())
+    : "background-color: #444; color: white; border: none; padding: 10px; border-radius: 10px;");
+}
+
+void MainWindow::toggleRepeat() {
+    isRepeatActive = !isRepeatActive;
+    musicPlayer->setRepeat(isRepeatActive);
+    repeatButton->setStyleSheet(isRepeatActive ? QString("background-color: %1; color: white; border: none; padding: 10px; border-radius: 10px;").arg(dominantColor.name())
+    : "background-color: #444; color: white; border: none; padding: 10px; border-radius: 10px;");
+}
+
+void MainWindow::prevSong() {
+    int currentIndex = songListWidget->currentRow();
+    if (currentIndex > 0) {
+        songListWidget->setCurrentRow(currentIndex - 1);
+        playSelectedSong(songListWidget->currentItem());
+    }
+}
+
+void MainWindow::nextSong() {
+    int currentIndex = songListWidget->currentRow();
+    if (currentIndex < songListWidget->count() - 1) {
+        songListWidget->setCurrentRow(currentIndex + 1);
+        playSelectedSong(songListWidget->currentItem());
+    }
+}
+
+void MainWindow::updatePlayPauseButtons(QMediaPlayer::PlaybackState state) {
+    if (state == QMediaPlayer::PlayingState) {
+        playButton->hide();
+        pauseButton->show();
+    } else {
+        playButton->show();
+        pauseButton->hide();
+    }
+}
+
+void MainWindow::openFolder() {
+    QString folderPath = QFileDialog::getExistingDirectory(this, "Select Music Folder");
+    if (!folderPath.isEmpty()) {
+        settings->setValue("musicFolder", folderPath);
+        QDir directory(folderPath);
+        QStringList musicFiles = directory.entryList(QStringList() << "*.mp3" << "*.wav" << "*.flac", QDir::Files);
+        playlist.clear();
+        songListWidget->clear();
+        allSongs.clear();
+        foreach (QString fileName, musicFiles) {
+            QString filePath = directory.absoluteFilePath(fileName);
+            playlist.append(QUrl::fromLocalFile(filePath));
+            allSongs.append(fileName);
+
+            // Leggi i tag ID3 usando TagLib
+            TagLib::FileRef f(filePath.toUtf8().constData());
+            QString displayName = fileName;
+            if (!f.isNull() && f.tag()) {
+                TagLib::Tag *tag = f.tag();
+                QString title = tag->title().toCString(true);
+                QString artist = tag->artist().toCString(true);
+                if (!title.isEmpty()) {
+                    displayName = title;
+                }
+                if (!artist.isEmpty()) {
+                    displayName += " - " + artist;
+                }
+            }
+
+            QListWidgetItem *item = new QListWidgetItem(displayName, songListWidget);
+            item->setData(Qt::UserRole, filePath);
+        }
+    }
+}
+
+void MainWindow::playSelectedSong(QListWidgetItem *item) {
+    QString filePath = item->data(Qt::UserRole).toString();
+    musicPlayer->setMedia(QUrl::fromLocalFile(filePath));
+    musicPlayer->play();
+
+    // Leggi i tag ID3 usando TagLib
+    TagLib::FileRef f(filePath.toUtf8().constData());
+    if (!f.isNull() && f.tag()) {
+        TagLib::Tag *tag = f.tag();
+        QString title = tag->title().toCString(true);
+        QString artist = tag->artist().toCString(true);
+        if (!title.isEmpty()) {
+            songTitleLabel->setText(title);
+        } else {
+            songTitleLabel->setText(item->text());
+        }
+        if (!artist.isEmpty()) {
+            songArtistLabel->setText(artist);
+        } else {
+            songArtistLabel->setText("");
+        }
+        displayCoverArt(filePath);
+    } else {
+        songTitleLabel->setText(item->text());
+        songArtistLabel->setText("");
+    }
+}
+
+void MainWindow::updateSlider(qint64 position) {
+    progressSlider->setValue(static_cast<int>(position));
+    elapsedTimeLabel->setText(formatTime(position));
+}
+
+void MainWindow::updateSliderRange(qint64 duration) {
+    progressSlider->setRange(0, static_cast<int>(duration));
+    totalTimeLabel->setText(formatTime(duration));
+}
+
+void MainWindow::setPlayerPosition(int position) {
+    musicPlayer->setPosition(position);
+}
+
+void MainWindow::openOptionsDialog() {
+    optionsDialog = new QDialog(this);
+    optionsDialog->setWindowTitle("Options");
+
+    QVBoxLayout *optionsLayout = new QVBoxLayout(optionsDialog);
+    QLabel *musicFolderLabel = new QLabel("Music Folder:", optionsDialog);
+    musicFolderPath = new QLineEdit(optionsDialog);
+    musicFolderPath->setText(settings->value("musicFolder", "").toString());
+    QPushButton *browseButton = new QPushButton("Browse", optionsDialog);
+
+    connect(browseButton, &QPushButton::clicked, [this]() {
+        QString folderPath = QFileDialog::getExistingDirectory(this, "Select Music Folder");
+        if (!folderPath.isEmpty()) {
+            musicFolderPath->setText(folderPath);
+        }
+    });
+
+    QPushButton *okButton = new QPushButton("OK", optionsDialog);
+    connect(okButton, &QPushButton::clicked, [this]() {
+        settings->setValue("musicFolder", musicFolderPath->text());
+        openFolder();
+        optionsDialog->accept();
+    });
+
+    optionsLayout->addWidget(musicFolderLabel);
+    optionsLayout->addWidget(musicFolderPath);
+    optionsLayout->addWidget(browseButton);
+    optionsLayout->addWidget(okButton);
+
+    optionsDialog->setLayout(optionsLayout);
+    optionsDialog->exec();
+}
+
+void MainWindow::loadSettings() {
+    QString folderPath = settings->value("musicFolder", "").toString();
+    if (!folderPath.isEmpty()) {
+        QDir directory(folderPath);
+        QStringList musicFiles = directory.entryList(QStringList() << "*.mp3" << "*.wav" << "*.flac", QDir::Files);
+        playlist.clear();
+        songListWidget->clear();
+        allSongs.clear();
+        foreach (QString fileName, musicFiles) {
+            QString filePath = directory.absoluteFilePath(fileName);
+            playlist.append(QUrl::fromLocalFile(filePath));
+            allSongs.append(fileName);
+
+            // Leggi i tag ID3 usando TagLib
+            TagLib::FileRef f(filePath.toUtf8().constData());
+            QString displayName = fileName;
+            if (!f.isNull() && f.tag()) {
+                TagLib::Tag *tag = f.tag();
+                QString title = tag->title().toCString(true);
+                QString artist = tag->artist().toCString(true);
+                if (!title.isEmpty()) {
+                    displayName = title;
+                }
+                if (!artist.isEmpty()) {
+                    displayName += " - " + artist;
+                }
+            }
+
+            QListWidgetItem *item = new QListWidgetItem(displayName, songListWidget);
+            item->setData(Qt::UserRole, filePath);
+        }
+    }
+}
+
+void MainWindow::saveSettings() {
+    settings->setValue("musicFolder", musicFolderPath->text());
+}
+
+void MainWindow::searchSongs(const QString &searchText) {
+    ::searchSongs(searchText, allSongs, playlist, songListWidget);
+}
+
+void MainWindow::displayCoverArt(const QString &filePath) {
+    TagLib::MPEG::File mpegFile(filePath.toUtf8().constData());
+    TagLib::ID3v2::Tag *id3v2tag = mpegFile.ID3v2Tag();
+    if (id3v2tag) {
+        const TagLib::ID3v2::FrameList frames = id3v2tag->frameListMap()["APIC"];
+        if (!frames.isEmpty()) {
+            TagLib::ID3v2::AttachedPictureFrame *frame = static_cast<TagLib::ID3v2::AttachedPictureFrame *>(frames.front());
+            QPixmap pixmap;
+            if (pixmap.loadFromData(reinterpret_cast<const uchar *>(frame->picture().data()), frame->picture().size())) {
+                coverArtLabel->setPixmap(pixmap.scaled(coverArtLabel->size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
+
+                // Ottenere i colori dai 5 punti
+                QImage image = pixmap.toImage();
+                int padding = 10;
+                QList<QPoint> points = {
+                    QPoint(image.width() / 2, image.height() / 2), // Centro
+                    QPoint(padding, padding), // Alto a sinistra
+                    QPoint(image.width() - padding, padding), // Alto a destra
+                    QPoint(padding, image.height() - padding), // Basso a sinistra
+                    QPoint(image.width() - padding, image.height() - padding) // Basso a destra
+                };
+
+                QHash<QColor, int> colorCount;
+                for (const QPoint &point : points) {
+                    QColor color = image.pixelColor(point);
+                    if (color != QColor(Qt::white) && color.lightness() < 200) { // Escludi i colori vicini al bianco
+                        colorCount[color]++;
+                    }
+                }
+
+                // Trovare il colore più frequente
+                QColor dominantColor = QColor(Qt::white);
+                int maxCount = 0;
+                for (auto it = colorCount.constBegin(); it != colorCount.constEnd(); ++it) {
+                    if (it.value() > maxCount) {
+                        dominantColor = it.key();
+                        maxCount = it.value();
+                    }
+                }
+
+                // Cambiare il colore dello slider del player
+                QString sliderStyle = QString("QSlider::groove:horizontal { background: #333; height: 4px; }"
+                "QSlider::handle:horizontal { background: #aaa; width: 14px; margin: -5px 0; border-radius: 7px; }"
+                "QSlider::sub-page:horizontal { background: %1; }").arg(dominantColor.name());
+                progressSlider->setStyleSheet(sliderStyle);
+                volumeSlider->setStyleSheet(sliderStyle);
+
+                // Cambiare il colore dei pulsanti play/pause
+                QString buttonStyle = QString("background-color: %1; color: white; border: none; padding: 10px; border-radius: 10px;").arg(dominantColor.name());
+                playButton->setStyleSheet(buttonStyle);
+                pauseButton->setStyleSheet(buttonStyle);
+
+            } else {
+                coverArtLabel->clear();
+                resetSliderStyle();
+            }
+        } else {
+            coverArtLabel->clear();
+            resetSliderStyle();
+        }
+    } else {
+        coverArtLabel->clear();
+        resetSliderStyle();
+    }
+}
+
+void MainWindow::resetSliderStyle() {
+    // Resetta lo stile degli slider e dei pulsanti quando non c'è una copertina valida
+    QString defaultSliderStyle = "QSlider::groove:horizontal { background: #333; height: 4px; }"
+    "QSlider::handle:horizontal { background: #aaa; width: 14px; margin: -5px 0; border-radius: 7px; }"
+    "QSlider::sub-page:horizontal { background: #5a5; }";
+    progressSlider->setStyleSheet(defaultSliderStyle);
+    volumeSlider->setStyleSheet(defaultSliderStyle);
+
+    QString defaultButtonStyle = "background-color: #444; color: white; border: none; padding: 10px; border-radius: 10px;";
+    playButton->setStyleSheet(defaultButtonStyle);
+    pauseButton->setStyleSheet(defaultButtonStyle);
+}
+
+
+
+void MainWindow::jumpToSliderPosition(QMouseEvent *event, QSlider *slider) {
+    int newValue = QStyle::sliderValueFromPosition(slider->minimum(), slider->maximum(), event->pos().x(), slider->width());
+    slider->setValue(newValue);
+    setPlayerPosition(newValue);
+}
+
+bool MainWindow::eventFilter(QObject *obj, QEvent *event) {
+    if (event->type() == QEvent::MouseButtonPress) {
+        QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
+        if (obj == progressSlider) {
+            jumpToSliderPosition(mouseEvent, progressSlider);
+            return true;  // Evento gestito
+        } else if (obj == volumeSlider) {
+            // Gestisci il clic sullo slider del volume in modo indipendente
+            int newValue = QStyle::sliderValueFromPosition(volumeSlider->minimum(), volumeSlider->maximum(), mouseEvent->pos().x(), volumeSlider->width());
+            volumeSlider->setValue(newValue);
+            musicPlayer->setVolume(newValue);
+            return true;  // Evento gestito
+        }
+    }
+    return QMainWindow::eventFilter(obj, event);
+}
+
+
+QString MainWindow::formatTime(qint64 milliseconds) {
+    int seconds = (milliseconds / 1000) % 60;
+    int minutes = (milliseconds / 60000) % 60;
+    int hours = (milliseconds / 3600000);
+    return hours > 0
+    ? QString("%1:%2:%3").arg(hours, 2, 10, QChar('0')).arg(minutes, 2, 10, QChar('0')).arg(seconds, 2, 10, QChar('0'))
+    : QString("%1:%2").arg(minutes, 2, 10, QChar('0')).arg(seconds, 2, 10, QChar('0'));
+}
+
+
+  File: MainWindow.h
+==> ./mainwindow/MainWindow.h <==
+#ifndef MAINWINDOW_H
+#define MAINWINDOW_H
+
+#include <QMainWindow>
+#include <QListWidget>
+#include <QSlider>
+#include <QLineEdit>
+#include <QDialog>
+#include <QSettings>
+#include <QPushButton>
+#include <QMediaPlayer>
+#include <QLabel>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QGraphicsBlurEffect>
+#include "MusicPlayer.h"
+#include "../widgets/MarqueeLabel.h"
+
+class MainWindow : public QMainWindow {
+    Q_OBJECT
+
+public:
+    MainWindow(QWidget *parent = nullptr);
+    ~MainWindow();
+
+protected:
+    void resizeEvent(QResizeEvent *event) override;
+    bool eventFilter(QObject *obj, QEvent *event) override;
+
+private slots:
+    void openFolder();
+    void play();
+    void pause();
+    void prevSong();
+    void nextSong();
+    void playSelectedSong(QListWidgetItem *item);
+    void openOptionsDialog();
+    void updateSlider(qint64 position);
+    void setPlayerPosition(int position);
+    void loadSettings();
+    void saveSettings();
+    void updatePlayPauseButtons(QMediaPlayer::PlaybackState state);
+    void searchSongs(const QString &searchText);
+    void updateSliderRange(qint64 duration);
+    void jumpToSliderPosition(QMouseEvent *event, QSlider *slider);
+    void toggleShuffle();
+    void toggleRepeat();
+
+private:
+    void setupUI();
+    void updateLayout();
+    void displayCoverArt(const QString &filePath);
+    void resetSliderStyle();  // Aggiungi questa dichiarazione
+    QString formatTime(qint64 milliseconds);
+
+    MusicPlayer *musicPlayer;
+    QList<QUrl> playlist;
+    QListWidget *songListWidget;
+    QSlider *volumeSlider;
+    QSlider *progressSlider;
+    QLineEdit *musicFolderPath;
+    QLineEdit *searchBar;
+    QPushButton *optionsButton;
+    QPushButton *shuffleButton;
+    QPushButton *repeatButton;
+    QPushButton *playButton;
+    QPushButton *pauseButton;
+    QPushButton *prevButton;
+    QPushButton *nextButton;
+    QDialog *optionsDialog;
+    QSettings *settings;
+    QStringList allSongs;
+
+    QLabel *titleLabel;  // Aggiungi questa dichiarazione
+    MarqueeLabel *songTitleLabel;
+    MarqueeLabel *songArtistLabel;
+    QLabel *elapsedTimeLabel;
+    QLabel *totalTimeLabel;
+    QLabel *coverArtLabel;
+    QVBoxLayout *playerLayout;
+    QVBoxLayout *playlistLayout;
+    QWidget *playerWidget;
+    QWidget *playlistWidget;
+    QHBoxLayout *mainLayout;
+
+    bool isShuffleActive;  // Aggiungi questa variabile
+    bool isRepeatActive;
+
+    QColor dominantColor;
+};
+
+#endif // MAINWINDOW_H
+
+
+  File: VisualizerWidget.cpp
+==> ./mainwindow/VisualizerWidget.cpp <==
+#include "VisualizerWidget.h"
+#include <QPainter>
+#include <QAudioBuffer>
+#include <QUrl>
+#include <cmath>
+
+VisualizerWidget::VisualizerWidget(QSlider *slider, QWidget *parent)
+: QWidget(parent), linkedSlider(slider), amplitude(20), frequency(2), phase(0), sampleSize(1024) {
+    timer = new QTimer(this);
+    connect(timer, &QTimer::timeout, this, &VisualizerWidget::updateAnimation);
+
+    decoder = new QAudioDecoder(this);
+    connect(decoder, &QAudioDecoder::bufferReady, this, &VisualizerWidget::processBuffer);
+
+    fftOutput.resize(sampleSize);
+    plan = fftw_plan_r2r_1d(sampleSize, fftOutput.data(), fftOutput.data(), FFTW_R2HC, FFTW_ESTIMATE);
+}
+
+void VisualizerWidget::setBaseColor(const QColor &color) {
+    baseColor = color;
+}
+
+void VisualizerWidget::start() {
+    timer->start(30);
+}
+
+void VisualizerWidget::stop() {
+    timer->stop();
+    decoder->stop();
+    fftw_destroy_plan(plan);
+}
+
+void VisualizerWidget::setAudioSource(const QString &filePath) {
+    decoder->setSource(QUrl::fromLocalFile(filePath));
+    decoder->start();
+}
+
+void VisualizerWidget::processBuffer() {
+    QAudioBuffer buffer = decoder->read();
+    const qint16 *data = buffer.constData<qint16>();
+    for (int i = 0; i < sampleSize; ++i) {
+        fftOutput[i] = data[i];
+    }
+
+    fftw_execute(plan);
+}
+
+void VisualizerWidget::paintEvent(QPaintEvent *event) {
+    // Non facciamo nulla qui
+}
+
+void VisualizerWidget::updateAnimation() {
+    phase += frequency;
+    if (phase >= 360) {
+        phase -= 360;
+    }
+
+    // Aggiorna lo stile del QSlider
+    float scale = 1.0 + amplitude * std::abs(fftOutput[1]) / 1000.0;
+    QColor newColor = baseColor;
+    newColor.setAlphaF(scale);
+    QString sliderStyle = QString("QSlider::groove:horizontal { background: %1; height: 8px; }"
+    "QSlider::handle:horizontal { background: #aaa; width: 20px; margin: -6px 0; border-radius: 10px; }"
+    "QSlider::sub-page:horizontal { background: %2; }")
+    .arg(newColor.darker().name(), newColor.name());
+    linkedSlider->setStyleSheet(sliderStyle);
+
+    update();
+}
+
+
+  File: VisualizerWidget.h
+==> ./mainwindow/VisualizerWidget.h <==
+#ifndef VISUALIZERWIDGET_H
+#define VISUALIZERWIDGET_H
+
+#include <QWidget>
+#include <QTimer>
+#include <QAudioDecoder>
+#include <QSlider>
+#include <fftw3.h>
+#include <vector>
+
+class VisualizerWidget : public QWidget {
+    Q_OBJECT
+
+public:
+    VisualizerWidget(QSlider *slider, QWidget *parent = nullptr);
+
+    void setBaseColor(const QColor &color);
+    void start();
+    void stop();
+    void setAudioSource(const QString &filePath);
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private slots:
+    void updateAnimation();
+    void processBuffer();
+
+private:
+    QColor baseColor;
+    int amplitude;
+    int frequency;
+    int phase;
+    QTimer *timer;
+    QAudioDecoder *decoder;
+    QSlider *linkedSlider;
+    std::vector<double> fftOutput;
+    int sampleSize;
+    fftw_plan plan;
+};
+
+#endif // VISUALIZERWIDGET_H
+
+
+File: MusicPlayer.cpp
+==> ./MusicPlayer.cpp <==
+#include "MusicPlayer.h"
+
+MusicPlayer::MusicPlayer(QObject *parent) : QObject(parent) {
+    player = new QMediaPlayer(this);
+    audioOutput = new QAudioOutput(this);
+    player->setAudioOutput(audioOutput);
+
+    connect(player, &QMediaPlayer::positionChanged, this, &MusicPlayer::positionChanged);
+    connect(player, &QMediaPlayer::durationChanged, this, &MusicPlayer::durationChanged);
+}
+
+MusicPlayer::~MusicPlayer() {
+    delete player;
+    delete audioOutput;
+}
+
+void MusicPlayer::setMedia(const QUrl &url) {
+    player->setSource(url);
+}
+
+void MusicPlayer::play() {
+    player->play();
+}
+
+void MusicPlayer::pause() {
+    player->pause();
+}
+
+void MusicPlayer::stop() {
+    player->stop();
+}
+
+void MusicPlayer::setVolume(int volume) {
+    audioOutput->setVolume(volume / 100.0);
+}
+
+void MusicPlayer::setPosition(int position) {
+    player->setPosition(position);
+}
+
+QMediaPlayer* MusicPlayer::getPlayer() const {
+    return player;
+}
+
+
+File: MusicPlayer.h
+==> ./MusicPlayer.h <==
+#ifndef MUSICPLAYER_H
+#define MUSICPLAYER_H
+
+#include <QMediaPlayer>
+#include <QAudioOutput>
+#include <QListWidgetItem>
+
+class MusicPlayer : public QObject {
+    Q_OBJECT
+
+public:
+    MusicPlayer(QObject *parent = nullptr);
+    ~MusicPlayer();
+
+    void setMedia(const QUrl &url);
+    void play();
+    void pause();
+    void stop();
+    void setVolume(int volume);
+    void setPosition(int position);
+    QMediaPlayer* getPlayer() const;
+
+signals:
+    void positionChanged(qint64 position);
+    void durationChanged(qint64 duration);
+
+private:
+    QMediaPlayer *player;
+    QAudioOutput *audioOutput;
+};
+
+#endif // MUSICPLAYER_H
+
+
+File: MusicPlayer.h
+==> ./MusicPlayer.h
+ <==
+#ifndef MUSICPLAYER_H
+#define MUSICPLAYER_H
+
+#include <QMediaPlayer>
+#include <QAudioOutput>
+#include <QListWidgetItem>
+
+class MusicPlayer : public QObject {
+    Q_OBJECT
+
+public:
+    MusicPlayer(QObject *parent = nullptr);
+    ~MusicPlayer();
+
+    void setMedia(const QUrl &url);
+    void play();
+    void pause();
+    void stop();
+    void setVolume(int volume);
+    void setPosition(int position);
+
+signals:
+    void positionChanged(qint64 position);
+    void durationChanged(qint64 duration);
+
+private:
+    QMediaPlayer *player;
+    QAudioOutput *audioOutput;
+};
+
+#endif // MUSICPLAYER_H
+
+
+File: output.txt
+==> ./output.txt <==
+
+
+Directory: player
+  File: MusicPlayer.cpp
+==> ./player/MusicPlayer.cpp <==
+#include "MusicPlayer.h"
+#include <algorithm>
+#include <random>
+
+MusicPlayer::MusicPlayer(QObject *parent) : QObject(parent), shuffleMode(false), repeatMode(false), currentIndex(0) {
+    player = new QMediaPlayer(this);
+    audioOutput = new QAudioOutput(this);
+    player->setAudioOutput(audioOutput);
+
+    connect(player, &QMediaPlayer::positionChanged, this, &MusicPlayer::positionChanged);
+    connect(player, &QMediaPlayer::durationChanged, this, &MusicPlayer::durationChanged);
+    connect(player, &QMediaPlayer::mediaStatusChanged, this, [this](QMediaPlayer::MediaStatus status) {
+        if (status == QMediaPlayer::EndOfMedia) {
+            playNext();
+        }
+    });
+}
+
+MusicPlayer::~MusicPlayer() {
+    delete player;
+    delete audioOutput;
+}
+
+void MusicPlayer::setMedia(const QUrl &url) {
+    mediaList.clear();
+    mediaList.append(url);
+    currentIndex = 0;
+    playCurrentMedia();
+}
+
+void MusicPlayer::play() {
+    player->play();
+}
+
+void MusicPlayer::pause() {
+    player->pause();
+}
+
+void MusicPlayer::stop() {
+    player->stop();
+}
+
+void MusicPlayer::setVolume(int volume) {
+    audioOutput->setVolume(volume / 100.0);
+}
+
+void MusicPlayer::setPosition(int position) {
+    player->setPosition(position);
+}
+
+QMediaPlayer* MusicPlayer::getPlayer() const {
+    return player;
+}
+
+void MusicPlayer::setShuffle(bool shuffle) {
+    shuffleMode = shuffle;
+    if (shuffle) {
+        std::random_device rd;
+        std::mt19937 g(rd());
+        std::shuffle(mediaList.begin(), mediaList.end(), g);
+    }
+}
+
+void MusicPlayer::setRepeat(bool repeat) {
+    repeatMode = repeat;
+}
+
+bool MusicPlayer::isShuffle() const {
+    return shuffleMode;
+}
+
+bool MusicPlayer::isRepeat() const {
+    return repeatMode;
+}
+
+void MusicPlayer::playNext() {
+    if (shuffleMode) {
+        currentIndex = std::rand() % mediaList.size();
+    } else {
+        currentIndex = (currentIndex + 1) % mediaList.size();
+    }
+
+    if (repeatMode && currentIndex == 0) {
+        playCurrentMedia();
+    } else if (!repeatMode && currentIndex == 0) {
+        player->stop();
+    } else {
+        playCurrentMedia();
+    }
+}
+
+void MusicPlayer::playPrevious() {
+    if (shuffleMode) {
+        currentIndex = std::rand() % mediaList.size();
+    } else {
+        currentIndex = (currentIndex - 1 + mediaList.size()) % mediaList.size();
+    }
+    playCurrentMedia();
+}
+
+void MusicPlayer::playCurrentMedia() {
+    if (!mediaList.isEmpty()) {
+        player->setSource(mediaList[currentIndex]);
+        player->play();
+    }
+}
+
+
+  File: MusicPlayer.h
+==> ./player/MusicPlayer.h <==
+#ifndef MUSICPLAYER_H
+#define MUSICPLAYER_H
+
+#include <QMediaPlayer>
+#include <QAudioOutput>
+#include <QList>
+
+class MusicPlayer : public QObject {
+    Q_OBJECT
+
+public:
+    MusicPlayer(QObject *parent = nullptr);
+    ~MusicPlayer();
+
+    void setMedia(const QUrl &url);
+    void play();
+    void pause();
+    void stop();
+    void setVolume(int volume);
+    void setPosition(int position);
+    QMediaPlayer* getPlayer() const;
+
+    void setShuffle(bool shuffle);
+    void setRepeat(bool repeat);
+    bool isShuffle() const;
+    bool isRepeat() const;
+
+signals:
+    void positionChanged(qint64 position);
+    void durationChanged(qint64 duration);
+
+private:
+    QMediaPlayer *player;
+    QAudioOutput *audioOutput;
+    bool shuffleMode;
+    bool repeatMode;
+    QList<QUrl> mediaList;
+    int currentIndex;
+
+    void playNext();
+    void playPrevious();
+    void playCurrentMedia();
+};
+
+#endif // MUSICPLAYER_H
+
+
+Directory: search
+  File: Search.cpp
+==> ./search/Search.cpp <==
+#include "Search.h"
+
+void searchSongs(const QString &searchText, const QStringList &allSongs, const QList<QUrl> &playlist, QListWidget *songListWidget) {
+    songListWidget->clear();
+    for (const QString &song : allSongs) {
+        if (song.contains(searchText, Qt::CaseInsensitive)) {
+            QListWidgetItem *item = new QListWidgetItem(song, songListWidget);
+            QString filePath = playlist[allSongs.indexOf(song)].toLocalFile();
+            item->setData(Qt::UserRole, filePath);
+        }
+    }
+}
+
+
+  File: Search.h
+==> ./search/Search.h <==
+#ifndef SEARCH_H
+#define SEARCH_H
+
+#include <QString>
+#include <QListWidget>
+#include <QStringList>
+#include <QUrl>
+
+void searchSongs(const QString &searchText, const QStringList &allSongs, const QList<QUrl> &playlist, QListWidget *songListWidget);
+
+#endif // SEARCH_H
+
+
+Directory: widgets
+  File: MarqueeLabel.cpp
+==> ./widgets/MarqueeLabel.cpp <==
+#include "MarqueeLabel.h"
+#include <QPainter>
+
+MarqueeLabel::MarqueeLabel(QWidget *parent) : QLabel(parent), textPosition(0) {
+    timer = new QTimer(this);
+    connect(timer, &QTimer::timeout, this, &MarqueeLabel::updateTextPosition);
+    timer->start(30); // Modifica la velocità del testo cambiando l'intervallo del timer
+}
+
+void MarqueeLabel::setText(const QString &text) {
+    QLabel::setText(text);
+    displayedText = text;
+    textPosition = width();
+}
+
+void MarqueeLabel::paintEvent(QPaintEvent *event) {
+    QPainter painter(this);
+    int textWidth = fontMetrics().horizontalAdvance(displayedText);
+    if (textWidth < width()) {
+        // If text is shorter than the label width, just draw it normally
+        painter.drawText(rect(), Qt::AlignLeft | Qt::AlignVCenter, displayedText);
+    } else {
+        // Otherwise, draw the scrolling text
+        painter.drawText(textPosition, height() / 2 + fontMetrics().ascent() / 2, displayedText);
+        painter.drawText(textPosition - textWidth - 10, height() / 2 + fontMetrics().ascent() / 2, displayedText);
+    }
+}
+
+void MarqueeLabel::updateTextPosition() {
+    int textWidth = fontMetrics().horizontalAdvance(displayedText);
+    textPosition -= 1; // Modifica la velocità del testo cambiando questo valore
+    if (textPosition < -textWidth) {
+        textPosition = width();
+    }
+    update();
+}
+
+
+  File: MarqueeLabel.h
+==> ./widgets/MarqueeLabel.h <==
+#ifndef MARQUEELABEL_H
+#define MARQUEELABEL_H
+
+#include <QLabel>
+#include <QTimer>
+
+class MarqueeLabel : public QLabel {
+    Q_OBJECT
+
+public:
+    explicit MarqueeLabel(QWidget *parent = nullptr);
+
+    void setText(const QString &text);
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private slots:
+    void updateTextPosition();
+
+private:
+    QString displayedText;
+    int textPosition;
+    QTimer *timer;
+};
+
+#endif // MARQUEELABEL_H
+
+

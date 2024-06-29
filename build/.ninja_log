@@ -1,0 +1,11 @@
+# ninja log v5
+0	782	1716978116759437539	MusicPlayer_autogen/timestamp	6e9f5e50db5c168e
+0	782	1716978116759437539	MusicPlayer_autogen/mocs_compilation.cpp	6e9f5e50db5c168e
+0	782	1716978116759437539	/home/delsa/Code/C++/Copia di music (1)/build/MusicPlayer_autogen/timestamp	6e9f5e50db5c168e
+0	782	1716978116759437539	/home/delsa/Code/C++/Copia di music (1)/build/MusicPlayer_autogen/mocs_compilation.cpp	6e9f5e50db5c168e
+800	5721	1716978121707434742	CMakeFiles/MusicPlayer.dir/player/MusicPlayer.cpp.o	8f666cc1b7a12b64
+800	8947	1716978124935432917	CMakeFiles/MusicPlayer.dir/main.cpp.o	dcdbe6064916b2ae
+799	9761	1716978125743432460	CMakeFiles/MusicPlayer.dir/MusicPlayer_autogen/mocs_compilation.cpp.o	2a802bcf0a8a582a
+801	9792	1716978125779432440	CMakeFiles/MusicPlayer.dir/search/Search.cpp.o	f0a1274fc37143f6
+800	10143	1716978126131432240	CMakeFiles/MusicPlayer.dir/mainwindow/MainWindow.cpp.o	59507e8ef20a2186
+10144	10870	1716978126851431833	MusicPlayer	9cbfaf1bfacacff1
